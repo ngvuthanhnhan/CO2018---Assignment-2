@@ -188,7 +188,42 @@ addr_t alloc_mem(uint32_t size, struct pcb_t * proc) {
 	pthread_mutex_unlock(&mem_lock);
 	return ret_mem;
 }
-
+void free_mem_break_point(struct pcb_t * proc) {
+	while (proc->bp >= PAGE_SIZE) {
+		addr_t last_addr = proc->bp - PAGE_SIZE;
+		addr_t last_segment = get_first_lv(last_addr);
+		addr_t last_page = get_second_lv(last_addr);
+		struct page_table_t * page_table = get_page_table(last_segment, proc->seg_table);
+		if (page_table == NULL) return;
+		while (last_page >= 0) {
+			int i;
+			for (i = 0; i < page_table->size; i++) {
+				if (page_table->table[i].v_index == last_page) {
+					proc->bp -= PAGE_SIZE;
+					last_page--;
+					break;
+				}
+			}
+			if (i == page_table->size) break;
+		}
+		if (last_page >= 0) break;
+	}
+}
+static int remove_page_table(addr_t v_segment, struct seg_table_t * seg_table) {
+	if (seg_table == NULL) return 0;
+	int i;
+	for (i = 0; i < seg_table->size; i++) {
+		if (seg_table->table[i].v_index == v_segment) {
+			int idx = seg_table->size-1;
+			seg_table->table[i] = seg_table->table[idx];
+			seg_table->table[idx].v_index = 0;
+			free(seg_table->table[idx].pages);
+			seg_table->size--;
+			return 1;
+		}
+	}
+	return 0;
+}
 int free_mem(addr_t address, struct pcb_t * proc) {
 	/*TODO: Release memory region allocated by [proc]. The first byte of
 	 * this region is indicated by [address]. Task to do:
@@ -198,6 +233,57 @@ int free_mem(addr_t address, struct pcb_t * proc) {
 	 * 	  the process [proc].
 	 * 	- Remember to use lock to protect the memory from other
 	 * 	  processes.  */
+	pthread_mutex_lock(&mem_lock);
+	
+	addr_t v_address = address;	// virtual address to free in process
+	addr_t p_address = 0;		// physical address to free in memory
+	
+	// Find physical page in memory
+	if (!translate(v_address, &p_address, proc)) return 1;
+	
+	// Clear physical page in memory
+	addr_t p_segment_page_index = p_address >> OFFSET_LEN; 
+	int num_pages = 0; // number of pages in list
+	int i;
+	for (i=p_segment_page_index; i!=-1; i=_mem_stat[i].next) {
+		num_pages++;
+		_mem_stat[i].proc = 0; // clear physical memory
+	}
+	
+	// Clear virtual page in process
+	for (i = 0; i < num_pages; i++) {
+		addr_t v_addr = v_address + i * PAGE_SIZE;
+		addr_t v_segment = get_first_lv(v_addr);
+		addr_t v_page = get_second_lv(v_addr);
+		// printf("- pid = %d ::: v_segment = %d, v_page = %d\n", proc->pid, v_segment, v_page);
+		struct page_table_t * page_table = get_page_table(v_segment, proc->seg_table);
+		if (page_table == NULL) {
+			puts("============= Error ===============");
+			continue;
+		}
+		int j;
+		for (j = 0; j < page_table->size; j++) {
+			if (page_table->table[j].v_index == v_page) {
+				int last = --page_table->size;
+				page_table->table[j] = page_table->table[last];
+				break;
+			}
+		}
+		if (page_table->size == 0) {
+			remove_page_table(v_segment, proc->seg_table);
+		}
+	}
+	// Update break pointer
+	if (v_address + num_pages * PAGE_SIZE == proc->bp) {
+		free_mem_break_point(proc);
+	}
+
+	
+	puts("============  Deallocation  ============");
+	dump();
+	
+
+	pthread_mutex_unlock(&mem_lock);
 	return 0;
 }
 
