@@ -180,7 +180,7 @@ addr_t alloc_mem(uint32_t size, struct pcb_t * proc) {
 		 * 	- Add entries to segment table page tables of [proc]
 		 * 	  to ensure accesses to allocated memory slot is
 		 * 	  valid. */
-        memmory_available_to_allocate(num_pages, proc);
+        allocate_memory_available(ret_mem, num_pages, proc);
 	}
     puts("============  Allocation  ============");
     dump();
